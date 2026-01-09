@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Product, UserRole, Order, UserStatus, OrderStatus, Address, PlatformSettings } from './types.ts';
+import { User, Product, UserRole, Order, UserStatus, OrderStatus, Address, PlatformSettings, PaymentStatus, LogisticsPartner } from './types.ts';
 import { INITIAL_PRODUCTS, MOCK_USERS, INITIAL_ORDERS } from './constants.tsx';
 import Layout from './components/Layout.tsx';
 import Home from './views/Home.tsx';
@@ -21,11 +21,13 @@ const App: React.FC = () => {
   const [aiResponse, setAiResponse] = useState<string | null>(null);
   const [aiQuery, setAiQuery] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [isProcessingCheckout, setIsProcessingCheckout] = useState(false);
   
-  // Platform-wide configurations
+  // Checkout & Payment State
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings>({
-    commissionPercentage: 12, // Default 12%
+    commissionPercentage: 12,
     gstPercentage: 18
   });
 
@@ -60,45 +62,33 @@ const App: React.FC = () => {
     });
   };
 
+  // Fix: Added missing handleToggleWishlist function to manage the wishlist state
   const handleToggleWishlist = (p: Product) => {
     setWishlist(prev => {
-      const isWishlisted = prev.find(item => item.id === p.id);
-      if (isWishlisted) {
+      const exists = prev.find(item => item.id === p.id);
+      if (exists) {
         return prev.filter(item => item.id !== p.id);
-      } else {
-        return [...prev, p];
       }
+      return [...prev, p];
     });
   };
 
-  const askAi = async () => {
-    if (!aiQuery.trim()) return;
-    setIsAiLoading(true);
-    try {
-      const response = await getShoppingAdvice(aiQuery, products);
-      setAiResponse(response);
-    } catch (error) {
-      console.error("AI Error:", error);
-      setAiResponse("I'm sorry, I'm having trouble getting recommendations right now.");
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
-  const handleCheckout = async () => {
+  // MOCK PAYMENT API INTEGRATION
+  const handleProcessPayment = async () => {
     if (cart.length === 0 || !currentUser) return;
+    setIsProcessingPayment(true);
     
-    setIsProcessingCheckout(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
+    // Simulate Gateway Response
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
     const orderTotal = cart.reduce((acc, curr) => acc + (curr.product.price * curr.quantity), 0);
-    
     const newOrder: Order = {
-      id: `ORD-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
+      id: `NEX-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
       buyerId: currentUser.id,
       date: new Date().toISOString(),
       total: orderTotal,
       status: OrderStatus.PENDING,
+      paymentStatus: PaymentStatus.PAID,
       items: cart.map(item => ({
         productId: item.product.id,
         productName: item.product.name,
@@ -109,19 +99,31 @@ const App: React.FC = () => {
     };
 
     setOrders(prev => [newOrder, ...prev]);
-
     setProducts(prev => prev.map(p => {
       const cartItem = cart.find(ci => ci.product.id === p.id);
-      if (cartItem) {
-        return { ...p, stock: Math.max(0, p.stock - cartItem.quantity) };
-      }
-      return p;
+      return cartItem ? { ...p, stock: Math.max(0, p.stock - cartItem.quantity) } : p;
     }));
 
     setCart([]);
-    setIsProcessingCheckout(false);
-    alert("Order Successful! Your selection is being prepared.");
+    setIsProcessingPayment(false);
+    setIsCheckoutOpen(false);
     window.location.hash = '#/buyer-dashboard';
+    alert("Payment Successful. Order Confirmed!");
+  };
+
+  const handleAssignLogistics = async (orderId: string, partner: LogisticsPartner) => {
+    setOrders(prev => prev.map(o => {
+      if (o.id === orderId) {
+        return {
+          ...o,
+          status: OrderStatus.SHIPPED,
+          logisticsPartner: partner,
+          trackingId: `TRK-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+          estimatedDelivery: new Date(Date.now() + 86400000 * 3).toLocaleDateString()
+        };
+      }
+      return o;
+    }));
   };
 
   const renderContent = () => {
@@ -130,15 +132,12 @@ const App: React.FC = () => {
     if (currentHash.startsWith('#/product/')) {
       const productId = currentHash.split('/').pop();
       const product = products.find(p => p.id === productId);
-      if (product) {
-        return <ProductDetail product={product} onAddToCart={handleAddToCart} onBack={() => window.location.hash = '#/'} />;
-      }
+      if (product) return <ProductDetail product={product} onAddToCart={handleAddToCart} onBack={() => window.location.hash = '#/'} />;
     }
 
     switch (currentHash) {
       case '#/': 
-      case '#/shop':
-        return <Home products={visibleProducts} onAddToCart={handleAddToCart} />;
+      case '#/shop': return <Home products={visibleProducts} onAddToCart={handleAddToCart} />;
       case '#/seller-dashboard':
         return currentUser?.role === UserRole.SELLER || currentUser?.role === UserRole.ADMIN ? (
           <SellerDashboard 
@@ -163,18 +162,15 @@ const App: React.FC = () => {
             onUpdateUserStatus={(uid, s) => setUsers(prev => prev.map(u => u.id === uid ? { ...u, status: s } : u))} 
             onUpdateProductModeration={(id, mod) => setProducts(prev => prev.map(p => p.id === id ? { ...p, isModerated: mod } : p))} 
             onDeleteProduct={id => setProducts(p => p.filter(x => x.id !== id))} 
+            onAssignLogistics={handleAssignLogistics}
           />
         ) : <Home products={visibleProducts} onAddToCart={handleAddToCart} />;
       case '#/buyer-dashboard':
         return currentUser ? (
           <BuyerDashboard 
-            user={currentUser} 
-            orders={orders} 
-            cart={cart} 
-            wishlist={wishlist} 
+            user={currentUser} orders={orders} cart={cart} wishlist={wishlist} 
             onUpdateOrderStatus={(oid, s) => setOrders(prev => prev.map(o => o.id === oid ? { ...o, status: s } : o))} 
-            onAddToCart={handleAddToCart} 
-            onRemoveFromCart={handleRemoveFromCart} 
+            onAddToCart={handleAddToCart} onRemoveFromCart={handleRemoveFromCart} 
             onAddAddress={(addr) => {
               const na = { ...addr, id: Math.random().toString(36).substr(2, 5) };
               setUsers(prev => prev.map(u => u.id === currentUser.id ? { ...u, addresses: [...u.addresses, na] } : u));
@@ -188,13 +184,14 @@ const App: React.FC = () => {
           />
         ) : <Home products={visibleProducts} onAddToCart={handleAddToCart} />;
       case '#/cart':
+        const cartTotal = cart.reduce((acc, curr) => acc + (curr.product.price * curr.quantity), 0);
         return (
-          <div className="max-w-4xl mx-auto px-4 py-20 animate-in fade-in duration-700">
+          <div className="max-w-4xl mx-auto px-4 py-20">
             <h1 className="text-5xl font-black mb-16 uppercase tracking-tighter">Your Bag</h1>
             {cart.length === 0 ? (
-              <div className="text-center py-20 bg-slate-50 rounded-[3rem] border border-dashed border-slate-200">
-                <p className="text-slate-400 font-bold mb-6">EMPTY BAG</p>
-                <button onClick={() => window.location.hash = '#/'} className="text-black border-b-2 border-black pb-1 uppercase text-xs font-black tracking-widest">Start Shopping</button>
+              <div className="text-center py-20 bg-slate-50 rounded-[3rem] border-2 border-dashed border-slate-100">
+                <p className="text-slate-300 font-black uppercase mb-6">Bag Empty</p>
+                <button onClick={() => window.location.hash = '#/'} className="text-black border-b-2 border-black pb-1 uppercase text-xs font-black">Shop Now</button>
               </div>
             ) : (
               <div className="space-y-6">
@@ -205,28 +202,65 @@ const App: React.FC = () => {
                       <div>
                         <h4 className="text-lg font-bold text-slate-900">{item.product.name}</h4>
                         <p className="text-xs text-slate-400 uppercase font-bold">{item.product.brand}</p>
-                        <div className="mt-2 flex items-center gap-3">
-                           <button onClick={() => handleRemoveFromCart(item.product.id)} className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center font-bold">-</button>
-                           <span className="font-bold">{item.quantity}</span>
-                           <button onClick={() => handleAddToCart(item.product)} className="w-8 h-8 rounded-full border border-slate-200 flex items-center justify-center font-bold">+</button>
+                        <div className="mt-4 flex items-center gap-3">
+                           <button onClick={() => handleRemoveFromCart(item.product.id)} className="w-10 h-10 rounded-full border border-slate-200 flex items-center justify-center font-bold hover:bg-slate-50">-</button>
+                           <span className="font-bold w-6 text-center">{item.quantity}</span>
+                           <button onClick={() => handleAddToCart(item.product)} className="w-10 h-10 rounded-full border border-slate-200 flex items-center justify-center font-bold hover:bg-slate-50">+</button>
                         </div>
                       </div>
                     </div>
                     <p className="text-2xl font-black text-slate-900">₹{(item.product.price * item.quantity).toLocaleString('en-IN')}</p>
                   </div>
                 ))}
-                <div className="pt-10 flex flex-col items-end gap-6">
+                <div className="pt-16 flex flex-col items-end gap-6">
                    <div className="text-right">
-                      <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Total Amount</p>
-                      <p className="text-6xl font-black text-slate-900">₹{cart.reduce((acc, curr) => acc + (curr.product.price * curr.quantity), 0).toLocaleString('en-IN')}</p>
+                      <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mb-1">Total Due</p>
+                      <p className="text-6xl font-black text-slate-900">₹{cartTotal.toLocaleString('en-IN')}</p>
                    </div>
-                   <button 
-                    onClick={handleCheckout} 
-                    disabled={isProcessingCheckout}
-                    className={`bg-black text-white px-16 py-6 rounded-full font-black text-xl shadow-2xl transition-all uppercase tracking-[0.2em] ${isProcessingCheckout ? 'opacity-50 cursor-not-allowed' : 'hover:scale-105 active:scale-95'}`}
-                   >
-                    {isProcessingCheckout ? 'Processing...' : 'Place Order'}
-                   </button>
+                   <button onClick={() => setIsCheckoutOpen(true)} className="bg-black text-white px-20 py-7 rounded-full font-black text-xl shadow-2xl hover:scale-105 active:scale-95 transition-all uppercase tracking-widest">Proceed to Checkout</button>
+                </div>
+              </div>
+            )}
+            
+            {/* PAYMENT GATEWAY SIMULATION */}
+            {isCheckoutOpen && (
+              <div className="fixed inset-0 bg-black/90 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
+                <div className="bg-white rounded-[4rem] w-full max-w-xl p-16 animate-in zoom-in-95 duration-500 shadow-3xl">
+                  <div className="text-center mb-12">
+                     <div className="inline-block bg-slate-50 p-6 rounded-full mb-6">
+                        <svg className="w-10 h-10 text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                     </div>
+                     <h2 className="text-3xl font-black uppercase tracking-tighter">Secure Payment</h2>
+                     <p className="text-slate-400 text-sm font-bold mt-2 uppercase">Nexus SecureGateway — Amount: ₹{cartTotal.toLocaleString('en-IN')}</p>
+                  </div>
+                  
+                  <div className="space-y-6">
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Card Number</label>
+                      <input disabled={isProcessingPayment} placeholder="**** **** **** 4455" className="w-full bg-slate-50 border-none rounded-2xl py-4 px-6 font-bold" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Expiry</label>
+                          <input disabled={isProcessingPayment} placeholder="MM/YY" className="w-full bg-slate-50 border-none rounded-2xl py-4 px-6 font-bold" />
+                       </div>
+                       <div>
+                          <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">CVV</label>
+                          <input disabled={isProcessingPayment} placeholder="***" type="password" className="w-full bg-slate-50 border-none rounded-2xl py-4 px-6 font-bold" />
+                       </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-12 space-y-4">
+                    <button 
+                      onClick={handleProcessPayment} 
+                      disabled={isProcessingPayment}
+                      className="w-full bg-black text-white py-6 rounded-3xl font-black uppercase tracking-widest text-sm shadow-xl hover:bg-slate-800 disabled:opacity-50 transition-all"
+                    >
+                      {isProcessingPayment ? 'Authorizing...' : 'Pay Securely'}
+                    </button>
+                    <button onClick={() => setIsCheckoutOpen(false)} className="w-full text-slate-400 text-[10px] font-black uppercase tracking-widest">Cancel Transaction</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -239,23 +273,6 @@ const App: React.FC = () => {
   return (
     <Layout user={currentUser} onLogout={() => setCurrentUser(null)} onSwitchRole={handleSwitchRole} cartCount={cart.reduce((a, c) => a + c.quantity, 0)}>
       {renderContent()}
-      <div className="fixed bottom-8 right-8 z-50">
-        <div className="relative group">
-          <button className="w-16 h-16 bg-black text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 transition-all active:scale-95">
-             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" strokeWidth="2"/></svg>
-          </button>
-          <div className="absolute bottom-20 right-0 w-80 bg-white rounded-[2rem] shadow-2xl border border-slate-100 p-8 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
-            <h4 className="font-bold text-slate-900 mb-2">Nexus Shopping AI</h4>
-            <div className="space-y-4">
-              {aiResponse && <div className="bg-slate-50 p-4 rounded-xl text-xs text-slate-800 leading-relaxed max-h-40 overflow-y-auto">{aiResponse}</div>}
-              <div className="flex gap-2">
-                <input type="text" className="flex-grow bg-slate-50 border-none rounded-xl px-4 py-2 text-sm outline-none" placeholder="Ask about styles..." value={aiQuery} onChange={e => setAiQuery(e.target.value)} onKeyPress={e => e.key === 'Enter' && askAi()}/>
-                <button onClick={askAi} disabled={isAiLoading} className="bg-black text-white p-2 rounded-xl">{isAiLoading ? '...' : <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M14 5l7 7m0 0l-7 7m7-7H3" strokeWidth="2"/></svg>}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
     </Layout>
   );
 };

@@ -11,6 +11,20 @@ export enum UserStatus {
   SUSPENDED = 'SUSPENDED'
 }
 
+export enum PaymentStatus {
+  UNPAID = 'UNPAID',
+  PAID = 'PAID',
+  REFUNDED = 'REFUNDED',
+  FAILED = 'FAILED'
+}
+
+export enum LogisticsPartner {
+  DELHIVERY = 'Delhivery',
+  BLUEDART = 'BlueDart',
+  ECOM_EXPRESS = 'Ecom Express',
+  NEXUS_LOGISTICS = 'Nexus FastTrack'
+}
+
 export interface Address {
   id: string;
   type: 'Home' | 'Work' | 'Other';
@@ -70,7 +84,9 @@ export interface Product {
 
 export enum OrderStatus {
   PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
   SHIPPED = 'SHIPPED',
+  OUT_FOR_DELIVERY = 'OUT_FOR_DELIVERY',
   DELIVERED = 'DELIVERED',
   CANCELLED = 'CANCELLED',
   RETURN_REQUESTED = 'RETURN_REQUESTED'
@@ -91,7 +107,11 @@ export interface Order {
   items: OrderItem[];
   total: number;
   status: OrderStatus;
+  paymentStatus: PaymentStatus;
   date: string;
+  trackingId?: string;
+  logisticsPartner?: LogisticsPartner;
+  estimatedDelivery?: string;
 }
 
 export interface Category {
